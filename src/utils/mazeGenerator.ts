@@ -1,6 +1,6 @@
-import { Cell, Wall } from '../types';
+import { Cell, Wall, Enemy, SkinType } from '../types';
 
-export function generateMaze(width: number, height: number, shardCount: number = 3): Cell[][] {
+export function generateMaze(width: number, height: number, shardCount: number = 3, level: number = 1): { grid: Cell[][], enemies: Enemy[] } {
   const grid: Cell[][] = [];
 
   // Initialize grid
@@ -52,7 +52,46 @@ export function generateMaze(width: number, height: number, shardCount: number =
     }
   }
 
-  return grid;
+  // Place obstacles (spikes) - starting from level 5, increasing every 5 levels
+  if (level >= 5) {
+    const obstacleCount = Math.floor(level / 5) * 2;
+    let obstaclesPlaced = 0;
+    while (obstaclesPlaced < obstacleCount) {
+      const rx = Math.floor(Math.random() * width);
+      const ry = Math.floor(Math.random() * height);
+      if ((rx === 0 && ry === 0) || (rx === width - 1 && ry === height - 1)) continue;
+      if (!grid[ry][rx].hasShard && !grid[ry][rx].isObstacle) {
+        grid[ry][rx].isObstacle = true;
+        obstaclesPlaced++;
+      }
+    }
+  }
+
+  // Place enemies - starting from level 8, increasing every 8 levels
+  const enemies: Enemy[] = [];
+  if (level >= 8) {
+    const enemyCount = Math.floor(level / 8);
+    for (let i = 0; i < enemyCount; i++) {
+      let enemyPlaced = false;
+      while (!enemyPlaced) {
+        const rx = Math.floor(Math.random() * width);
+        const ry = Math.floor(Math.random() * height);
+        if ((rx === 0 && ry === 0) || (rx === width - 1 && ry === height - 1)) continue;
+        if (!grid[ry][rx].hasShard && !grid[ry][rx].isObstacle) {
+          enemies.push({
+            id: `enemy-${i}`,
+            x: rx,
+            y: ry,
+            type: Math.random() > 0.5 ? 'patrol' : 'random',
+            direction: ['up', 'down', 'left', 'right'][Math.floor(Math.random() * 4)] as any,
+          });
+          enemyPlaced = true;
+        }
+      }
+    }
+  }
+
+  return { grid, enemies };
 }
 
 function getUnvisitedNeighbors(cell: Cell, grid: Cell[][], width: number, height: number): Cell[] {

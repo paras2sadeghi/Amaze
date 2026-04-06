@@ -1,26 +1,27 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence, PanInfo } from 'motion/react';
-import { Trophy, Timer, Move, Play, ChevronRight, Database, Eye, Sparkles, Rabbit, Cat, PawPrint, Carrot, Fish, Leaf, Circle, Lock } from 'lucide-react';
+import { Trophy, Timer, Move, Play, ChevronRight, Database, Eye, Sparkles, Rabbit, Cat, PawPrint, Carrot, Fish, Leaf, Circle, Lock, Skull, Flame, Heart } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { generateMaze } from './utils/mazeGenerator';
-import { Cell, GameState, SkinType } from './types';
+import { Cell, GameState, SkinType, Enemy } from './types';
 
 // Progressive difficulty calculation
 const getLevelConfig = (level: number) => {
   const size = Math.min(5 + Math.floor(level / 2), 25); // Starts at 5x5, increases every 2 levels
-  const shards = Math.min(1 + Math.floor(level / 3), 10); // Starts at 1 shard, increases every 3 levels
+  const shards = Math.min(1 + Math.floor(level / 2), 12); // Starts at 1 shard, increases every 2 levels
   return { size, shards };
 };
 
-const SKINS: { type: SkinType; name: string; icon: any; shard: any; unlockLevel: number; color: string; shardColor: string }[] = [
-  { type: 'spark', name: 'Spark', icon: Circle, shard: Database, unlockLevel: 1, color: 'text-cyan-400', shardColor: 'text-fuchsia-500' },
-  { type: 'bunny', name: 'Bunny', icon: Rabbit, shard: Carrot, unlockLevel: 2, color: 'text-pink-400', shardColor: 'text-orange-500' },
-  { type: 'cat', name: 'Cat', icon: Cat, shard: Fish, unlockLevel: 4, color: 'text-yellow-400', shardColor: 'text-blue-400' },
-  { type: 'panda', name: 'Panda', icon: PawPrint, shard: Leaf, unlockLevel: 6, color: 'text-white', shardColor: 'text-emerald-500' },
+const SKINS: { type: SkinType; name: string; icon: any; shard: any; color: string; shardColor: string; perk: string }[] = [
+  { type: 'spark', name: 'Spark', icon: Circle, shard: Database, color: 'text-cyan-400', shardColor: 'text-fuchsia-500', perk: 'Hyper-Drive: Faster movement speed' },
+  { type: 'bunny', name: 'Bunny', icon: Rabbit, shard: Carrot, color: 'text-pink-400', shardColor: 'text-orange-500', perk: 'Vitality: Start with 5 lives' },
+  { type: 'cat', name: 'Cat', icon: Cat, shard: Fish, color: 'text-yellow-400', shardColor: 'text-blue-400', perk: 'Vision: Scanner lasts 5 seconds' },
+  { type: 'panda', name: 'Panda', icon: PawPrint, shard: Leaf, color: 'text-white', shardColor: 'text-emerald-500', perk: 'Magnet: Collect adjacent shards' },
 ];
 
 export default function App() {
   const [grid, setGrid] = useState<Cell[][]>([]);
+  const [enemies, setEnemies] = useState<Enemy[]>([]);
   const [playerPos, setPlayerPos] = useState({ x: 0, y: 0 });
   const [gameState, setGameState] = useState<GameState>({
     status: 'start',
@@ -32,6 +33,7 @@ export default function App() {
     startTime: null,
     endTime: null,
     activeSkin: 'spark',
+    lives: 3,
   });
   const [time, setTime] = useState(0);
   const [cellSize, setCellSize] = useState(40);
@@ -57,11 +59,22 @@ export default function App() {
 
   const initGame = useCallback((nextLevel?: number) => {
     const level = nextLevel || gameState.level;
+    
+    // Check if it's a skin selection level (1, 11, 21...)
+    if ((level - 1) % 10 === 0 && gameState.status !== 'selecting') {
+      setGameState(prev => ({ ...prev, status: 'selecting', level }));
+      return;
+    }
+
     const config = getLevelConfig(level);
-    const newGrid = generateMaze(config.size, config.size, config.shards);
+    const { grid: newGrid, enemies: newEnemies } = generateMaze(config.size, config.size, config.shards, level);
     
     setGrid(newGrid);
+    setEnemies(newEnemies);
     setPlayerPos({ x: 0, y: 0 });
+    
+    const initialLives = gameState.activeSkin === 'bunny' ? 5 : 3;
+
     setGameState(prev => ({
       ...prev,
       status: 'playing',
@@ -71,6 +84,7 @@ export default function App() {
       totalShards: config.shards,
       startTime: Date.now(),
       endTime: null,
+      lives: initialLives,
     }));
     setTime(0);
     setIsScannerActive(false);
@@ -79,7 +93,25 @@ export default function App() {
     timerRef.current = setInterval(() => {
       setTime(t => t + 1);
     }, 1000);
-  }, [gameState.level]);
+  }, [gameState.level, gameState.activeSkin, gameState.status]);
+
+  const handleGameOver = useCallback(() => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    setGameState(prev => ({ ...prev, status: 'gameover' }));
+  }, []);
+
+  const handleHit = useCallback(() => {
+    setGameState(prev => {
+      const newLives = prev.lives - 1;
+      if (newLives <= 0) {
+        handleGameOver();
+        return { ...prev, lives: 0 };
+      }
+      // Reset player position on hit
+      setPlayerPos({ x: 0, y: 0 });
+      return { ...prev, lives: newLives };
+    });
+  }, [handleGameOver]);
 
   const handleWin = useCallback(() => {
     if (timerRef.current) clearInterval(timerRef.current);
@@ -99,8 +131,9 @@ export default function App() {
   const movePlayer = useCallback((dx: number, dy: number) => {
     if (gameState.status !== 'playing') return;
 
+    const moveCooldown = gameState.activeSkin === 'spark' ? 30 : 50;
     const now = Date.now();
-    if (now - lastMoveTime.current < 50) return;
+    if (now - lastMoveTime.current < moveCooldown) return;
     lastMoveTime.current = now;
 
     setPlayerPos(prev => {
@@ -118,28 +151,112 @@ export default function App() {
 
       // Shard collection
       const nextCell = grid[newY][newX];
+      let shardsFound = 0;
+      
       if (nextCell.hasShard) {
         nextCell.hasShard = false;
-        setGameState(s => ({ ...s, shardsCollected: s.shardsCollected + 1 }));
+        shardsFound++;
+      }
+
+      // Panda Magnet Perk: Collect adjacent shards
+      if (gameState.activeSkin === 'panda') {
+        const neighbors = [
+          { nx: newX + 1, ny: newY },
+          { nx: newX - 1, ny: newY },
+          { nx: newX, ny: newY + 1 },
+          { nx: newX, ny: newY - 1 },
+        ];
+        neighbors.forEach(({ nx, ny }) => {
+          if (nx >= 0 && nx < config.size && ny >= 0 && ny < config.size) {
+            const neighborCell = grid[ny][nx];
+            if (neighborCell.hasShard) {
+              neighborCell.hasShard = false;
+              shardsFound++;
+            }
+          }
+        });
+      }
+
+      if (shardsFound > 0) {
+        setGameState(s => ({ ...s, shardsCollected: s.shardsCollected + shardsFound }));
+      }
+
+      // Obstacle collision
+      if (nextCell.isObstacle) {
+        handleHit();
+        return prev;
       }
 
       setGameState(s => ({ ...s, moves: s.moves + 1 }));
 
       // Win check (must have all shards)
       if (newX === config.size - 1 && newY === config.size - 1) {
-        if (gameState.shardsCollected + (nextCell.hasShard ? 1 : 0) >= gameState.totalShards) {
+        if (gameState.shardsCollected + shardsFound >= gameState.totalShards) {
           handleWin();
         }
       }
 
       return { x: newX, y: newY };
     });
-  }, [grid, gameState.status, gameState.level, gameState.shardsCollected, gameState.totalShards, handleWin]);
+  }, [grid, gameState.status, gameState.level, gameState.shardsCollected, gameState.totalShards, gameState.activeSkin, handleWin, handleHit]);
+
+  // Enemy movement
+  useEffect(() => {
+    if (gameState.status !== 'playing' || enemies.length === 0) return;
+
+    const interval = setInterval(() => {
+      setEnemies(prevEnemies => prevEnemies.map(enemy => {
+        const directions: ('up' | 'down' | 'left' | 'right')[] = ['up', 'down', 'left', 'right'];
+        let nextDir = enemy.direction;
+
+        if (enemy.type === 'random' && Math.random() > 0.7) {
+          nextDir = directions[Math.floor(Math.random() * 4)];
+        }
+
+        let dx = 0, dy = 0;
+        if (nextDir === 'up') dy = -1;
+        else if (nextDir === 'down') dy = 1;
+        else if (nextDir === 'left') dx = -1;
+        else if (nextDir === 'right') dx = 1;
+
+        const newX = enemy.x + dx;
+        const newY = enemy.y + dy;
+        const config = getLevelConfig(gameState.level);
+
+        if (newX >= 0 && newX < config.size && newY >= 0 && newY < config.size) {
+          const cell = grid[enemy.y][enemy.x];
+          let blocked = false;
+          if (dx === 1 && cell.walls.right) blocked = true;
+          if (dx === -1 && cell.walls.left) blocked = true;
+          if (dy === 1 && cell.walls.bottom) blocked = true;
+          if (dy === -1 && cell.walls.top) blocked = true;
+
+          if (!blocked) {
+            return { ...enemy, x: newX, y: newY, direction: nextDir };
+          }
+        }
+
+        return { ...enemy, direction: directions[Math.floor(Math.random() * 4)] };
+      }));
+    }, Math.max(400, 800 - (gameState.level * 10))); // Enemies get faster
+
+    return () => clearInterval(interval);
+  }, [gameState.status, enemies.length, grid, gameState.level]);
+
+  // Collision check with enemies
+  useEffect(() => {
+    if (gameState.status !== 'playing') return;
+    const hit = enemies.find(e => e.x === playerPos.x && e.y === playerPos.y);
+    if (hit) {
+      handleHit();
+    }
+  }, [playerPos, enemies, gameState.status, handleHit]);
 
   const activateScanner = () => {
     if (isScannerActive || gameState.status !== 'playing') return;
     setIsScannerActive(true);
-    setTimeout(() => setIsScannerActive(false), 2500);
+    const duration = gameState.activeSkin === 'cat' ? 5000 : 2500;
+    setTimeout(() => setIsScannerActive(false), duration);
   };
 
   const handlePan = (_: any, info: PanInfo) => {
@@ -196,6 +313,7 @@ export default function App() {
           <div className="flex gap-4 text-[10px] font-mono text-slate-500 uppercase tracking-widest">
             <span className="flex items-center gap-1"><Timer size={10} /> {time}s</span>
             <span className="flex items-center gap-1"><Move size={10} /> {gameState.moves}</span>
+            <span className="flex items-center gap-1 text-red-500"><Heart size={10} fill="currentColor" /> {gameState.lives}</span>
           </div>
         </div>
         
@@ -258,6 +376,28 @@ export default function App() {
                     <ShardIcon size={cellSize * 0.6} className={`${activeSkinData.shardColor} drop-shadow-[0_0_8px_currentColor]`} />
                   </motion.div>
                 )}
+
+                {cell.skinShard && (
+                  <motion.div 
+                    animate={{ 
+                      y: [0, -4, 0],
+                      scale: [1, 1.1, 1]
+                    }}
+                    transition={{ repeat: Infinity, duration: 1.5 }}
+                    className="absolute inset-0 flex items-center justify-center p-1"
+                  >
+                    {(() => {
+                      const SkinIcon = SKINS.find(s => s.type === cell.skinShard)?.icon || Circle;
+                      return <SkinIcon size={cellSize * 0.7} className="text-yellow-400 drop-shadow-[0_0_10px_rgba(250,204,21,0.5)]" />;
+                    })()}
+                  </motion.div>
+                )}
+
+                {cell.isObstacle && (
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <Flame size={cellSize * 0.6} className="text-red-500 animate-pulse" />
+                  </div>
+                )}
                 
                 {x === config.size - 1 && y === config.size - 1 && (
                   <div className={`absolute inset-0 flex items-center justify-center transition-all duration-700 ${gameState.shardsCollected >= gameState.totalShards ? 'opacity-100 scale-100' : 'opacity-10 scale-50'}`}>
@@ -281,13 +421,31 @@ export default function App() {
               className="absolute z-30 flex items-center justify-center"
               animate={{ 
                 x: playerPos.x * cellSize, 
-                y: playerPos.y * cellSize 
+                y: playerPos.y * cellSize,
+                scale: gameState.status === 'playing' ? 1 : 0.8,
+                rotate: gameState.lives < 3 ? [0, -10, 10, -10, 0] : 0
               }}
-              transition={{ type: 'spring', stiffness: 500, damping: 40 }}
+              transition={{ 
+                x: { type: 'spring', stiffness: 500, damping: 40 },
+                y: { type: 'spring', stiffness: 500, damping: 40 },
+                rotate: { duration: 0.4 }
+              }}
               style={{ width: cellSize, height: cellSize }}
             >
               <PlayerIcon size={cellSize * 0.8} className={`${activeSkinData.color} drop-shadow-[0_0_10px_currentColor]`} />
             </motion.div>
+
+            {enemies.map(enemy => (
+              <motion.div
+                key={enemy.id}
+                className="absolute z-20 flex items-center justify-center"
+                animate={{ x: enemy.x * cellSize, y: enemy.y * cellSize }}
+                transition={{ type: 'tween', duration: 0.8 }}
+                style={{ width: cellSize, height: cellSize }}
+              >
+                <Skull size={cellSize * 0.7} className="text-red-600 drop-shadow-[0_0_8px_rgba(220,38,38,0.5)]" />
+              </motion.div>
+            ))}
           </motion.div>
         </motion.div>
       </div>
@@ -307,6 +465,9 @@ export default function App() {
             <div className={`text-[10px] font-bold uppercase tracking-widest ${isScannerActive ? 'text-white' : 'text-slate-500'}`}>
               Scanner
             </div>
+            <div className="text-[8px] text-slate-500 font-mono">
+              {gameState.activeSkin === 'cat' ? 'ENHANCED (5s)' : 'NORMAL (2.5s)'}
+            </div>
           </div>
           {isScannerActive && (
             <motion.div 
@@ -314,7 +475,7 @@ export default function App() {
               className="absolute bottom-0 left-0 h-1 bg-white"
               initial={{ width: '100%' }}
               animate={{ width: '0%' }}
-              transition={{ duration: 2.5, ease: "linear" }}
+              transition={{ duration: gameState.activeSkin === 'cat' ? 5 : 2.5, ease: "linear" }}
             />
           )}
         </button>
@@ -329,9 +490,9 @@ export default function App() {
 
       {/* OVERLAYS */}
       <AnimatePresence>
-        {gameState.status === 'start' && (
+        {(gameState.status === 'start' || gameState.status === 'selecting') && (
           <motion.div 
-            key="start-overlay"
+            key="selection-overlay"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -344,31 +505,32 @@ export default function App() {
             >
               <div className="space-y-2">
                 <h1 className="text-6xl font-black tracking-tighter bg-gradient-to-br from-cyan-400 via-fuchsia-500 to-purple-600 bg-clip-text text-transparent">
-                  Amaze!
+                  {gameState.status === 'start' ? 'Amaze!' : 'EVOLVE'}
                 </h1>
-                <p className="text-slate-400 text-sm">Unlock cute skins as you clear sectors.</p>
+                <p className="text-slate-400 text-sm">
+                  {gameState.status === 'start' 
+                    ? 'Choose your initial avatar and its unique perk.' 
+                    : `Sector ${gameState.level} reached. Select your skin for the next 10 levels.`}
+                </p>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 {SKINS.map((skin) => {
-                  const isLocked = gameState.level < skin.unlockLevel;
                   const isActive = gameState.activeSkin === skin.type;
                   const Icon = skin.icon;
                   return (
                     <button
                       key={skin.type}
-                      disabled={isLocked}
                       onClick={() => setGameState(s => ({ ...s, activeSkin: skin.type }))}
-                      className={`relative p-4 rounded-2xl border transition-all flex flex-col items-center gap-2 ${
+                      className={`relative p-4 rounded-2xl border transition-all flex flex-col items-center gap-2 text-left ${
                         isActive 
                           ? 'bg-slate-900 border-cyan-500 shadow-[0_0_20px_rgba(6,182,212,0.2)]' 
-                          : isLocked ? 'bg-slate-950 border-slate-900 opacity-40' : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                          : 'bg-slate-950 border-slate-800 hover:border-slate-700'
                       }`}
                     >
-                      {isLocked && <Lock size={14} className="absolute top-2 right-2 text-slate-600" />}
                       <Icon size={32} className={skin.color} />
                       <div className="text-[10px] font-bold uppercase tracking-widest">{skin.name}</div>
-                      {isLocked && <div className="text-[8px] text-slate-500">LVL {skin.unlockLevel}</div>}
+                      <div className="text-[8px] text-slate-500 leading-tight">{skin.perk}</div>
                     </button>
                   );
                 })}
@@ -378,7 +540,7 @@ export default function App() {
                 onClick={() => initGame()}
                 className="w-full py-5 bg-gradient-to-r from-cyan-500 to-fuchsia-600 text-white rounded-3xl font-black tracking-widest shadow-2xl shadow-cyan-500/20 active:scale-95 transition-transform text-lg"
               >
-                INITIALIZE HACK
+                {gameState.status === 'start' ? 'INITIALIZE HACK' : 'CONFIRM EVOLUTION'}
               </button>
             </motion.div>
           </motion.div>
@@ -438,6 +600,37 @@ export default function App() {
                   NEXT SECTOR <ChevronRight size={20} />
                 </button>
               </div>
+            </motion.div>
+          </motion.div>
+        )}
+        {gameState.status === 'gameover' && (
+          <motion.div 
+            key="gameover-overlay"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] bg-slate-950/95 backdrop-blur-xl flex flex-col items-center justify-center p-8"
+          >
+            <motion.div
+              initial={{ scale: 0.8, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              className="max-w-md w-full space-y-8 text-center"
+            >
+              <div className="w-24 h-24 mx-auto bg-red-500/10 rounded-full flex items-center justify-center border border-red-500/30">
+                <Skull size={48} className="text-red-500" />
+              </div>
+              
+              <div className="space-y-2">
+                <h2 className="text-4xl font-black tracking-tighter text-red-500">SYSTEM FAILURE</h2>
+                <p className="text-xs text-slate-500 font-mono uppercase tracking-widest">Sector {gameState.level} Compromised</p>
+              </div>
+
+              <button 
+                onClick={() => initGame()}
+                className="w-full py-5 bg-red-600 text-white rounded-3xl font-black tracking-widest shadow-2xl shadow-red-500/20 active:scale-95 transition-transform text-lg"
+              >
+                RETRY SECTOR
+              </button>
             </motion.div>
           </motion.div>
         )}
