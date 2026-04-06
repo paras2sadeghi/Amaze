@@ -2,7 +2,14 @@ export type Wall = 'top' | 'right' | 'bottom' | 'left';
 
 export type Difficulty = 'easy' | 'medium' | 'hard';
 
-export type SkinType = 'spark' | 'bunny' | 'cat' | 'panda';
+export type SkinType = 'default' | 'spark' | 'bunny' | 'cat' | 'dog';
+
+export interface SkinCharacter {
+  type: SkinType;
+  x: number;
+  y: number;
+  isCaught: boolean;
+}
 
 export interface Enemy {
   id: string;
@@ -33,5 +40,6 @@ export interface GameState {
   startTime: number | null;
   endTime: number | null;
   activeSkin: SkinType;
+  unlockedSkins: SkinType[];
   lives: number;
 }

@@ -1,0 +1,24 @@
+{
+  "entities": {
+    "LeaderboardEntry": {
+      "title": "Leaderboard Entry",
+      "description": "A record of a player's performance on a level.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Player's alias" },
+        "level": { "type": "integer", "description": "Highest level reached" },
+        "time": { "type": "integer", "description": "Time taken in seconds" },
+        "moves": { "type": "integer", "description": "Number of moves made" },
+        "skin": { "type": "string", "description": "Skin used" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the record was created" }
+      },
+      "required": ["name", "level", "time", "moves", "skin", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/leaderboard/{entryId}": {
+      "schema": "LeaderboardEntry",
+      "description": "Global leaderboard entries"
+    }
+  }
+}

@@ -1,9 +1,18 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence, PanInfo } from 'motion/react';
-import { Trophy, Timer, Move, Play, ChevronRight, Database, Eye, Sparkles, Rabbit, Cat, PawPrint, Carrot, Fish, Leaf, Circle, Lock, Skull, Flame, Heart } from 'lucide-react';
+import { Trophy, Timer, Move, Play, ChevronRight, Database, Eye, Sparkles, Rabbit, Cat, PawPrint, Carrot, Fish, Leaf, Circle, Lock, Skull, Flame, Heart, User, Dog, Bone, Zap, Ghost, Rocket } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { generateMaze } from './utils/mazeGenerator';
-import { Cell, GameState, SkinType, Enemy } from './types';
+import { Cell, GameState, SkinType, Enemy, SkinCharacter } from './types';
+import Leaderboard from './components/Leaderboard';
+import { db, collection, addDoc, query, orderBy, limit, onSnapshot, serverTimestamp, handleFirestoreError, OperationType } from './firebase';
+
+const Dot = ({ size, className }: { size: number; className?: string }) => (
+  <div 
+    className={`${className} rounded-full bg-current`} 
+    style={{ width: size * 0.4, height: size * 0.4 }} 
+  />
+);
 
 // Progressive difficulty calculation
 const getLevelConfig = (level: number) => {
@@ -12,11 +21,12 @@ const getLevelConfig = (level: number) => {
   return { size, shards };
 };
 
-const SKINS: { type: SkinType; name: string; icon: any; shard: any; color: string; shardColor: string; perk: string }[] = [
-  { type: 'spark', name: 'Spark', icon: Circle, shard: Database, color: 'text-cyan-400', shardColor: 'text-fuchsia-500', perk: 'Hyper-Drive: Faster movement speed' },
-  { type: 'bunny', name: 'Bunny', icon: Rabbit, shard: Carrot, color: 'text-pink-400', shardColor: 'text-orange-500', perk: 'Vitality: Start with 5 lives' },
-  { type: 'cat', name: 'Cat', icon: Cat, shard: Fish, color: 'text-yellow-400', shardColor: 'text-blue-400', perk: 'Vision: Scanner lasts 5 seconds' },
-  { type: 'panda', name: 'Panda', icon: PawPrint, shard: Leaf, color: 'text-white', shardColor: 'text-emerald-500', perk: 'Magnet: Collect adjacent shards' },
+const SKINS: { type: SkinType; name: string; icon: any; shard: any; color: string; shardColor: string; perk: string; unlockLevel?: number }[] = [
+  { type: 'default', name: 'Circle', icon: Circle, shard: Database, color: 'text-slate-400', shardColor: 'text-slate-500', perk: 'Standard: No special abilities' },
+  { type: 'spark', name: 'Spark', icon: Zap, shard: Database, color: 'text-cyan-400', shardColor: 'text-fuchsia-500', perk: 'Hyper-Drive: Faster movement speed', unlockLevel: 10 },
+  { type: 'bunny', name: 'Bunny', icon: Rabbit, shard: Carrot, color: 'text-pink-400', shardColor: 'text-orange-500', perk: 'Vitality: Start with 5 lives', unlockLevel: 20 },
+  { type: 'cat', name: 'Cat', icon: Cat, shard: Fish, color: 'text-yellow-400', shardColor: 'text-blue-400', perk: 'Vision: Scanner lasts 5 seconds', unlockLevel: 30 },
+  { type: 'dog', name: 'Doggo', icon: Dog, shard: Bone, color: 'text-white', shardColor: 'text-emerald-500', perk: 'Magnet: Collect adjacent shards', unlockLevel: 40 },
 ];
 
 export default function App() {
@@ -32,16 +42,57 @@ export default function App() {
     totalShards: 1,
     startTime: null,
     endTime: null,
-    activeSkin: 'spark',
+    activeSkin: 'default',
+    unlockedSkins: ['default'],
     lives: 3,
   });
+  const [skinCharacter, setSkinCharacter] = useState<SkinCharacter | null>(null);
   const [time, setTime] = useState(0);
   const [cellSize, setCellSize] = useState(40);
   const [isScannerActive, setIsScannerActive] = useState(false);
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [showSkinSelection, setShowSkinSelection] = useState(false);
+  const [playerName, setPlayerName] = useState(() => localStorage.getItem('maze_player_name') || '');
+  const [leaderboardEntries, setLeaderboardEntries] = useState<any[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const lastMoveTime = useRef<number>(0);
 
-  // Responsive cell size calculation
+  // Leaderboard listener
+  useEffect(() => {
+    const q = query(collection(db, 'leaderboard'), orderBy('level', 'desc'), orderBy('time', 'asc'), limit(50));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const entries = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setLeaderboardEntries(entries);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'leaderboard');
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const submitScore = async () => {
+    if (!playerName.trim() || isSubmitting) return;
+    setIsSubmitting(true);
+    localStorage.setItem('maze_player_name', playerName.trim());
+    try {
+      await addDoc(collection(db, 'leaderboard'), {
+        name: playerName.trim(),
+        level: gameState.level,
+        time: time,
+        moves: gameState.moves,
+        skin: gameState.activeSkin,
+        createdAt: serverTimestamp()
+      });
+      initGame(gameState.level + 1);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'leaderboard');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
   useEffect(() => {
     const updateSize = () => {
       const screenWidth = window.innerWidth;
@@ -60,12 +111,6 @@ export default function App() {
   const initGame = useCallback((nextLevel?: number) => {
     const level = nextLevel || gameState.level;
     
-    // Check if it's a skin selection level (1, 11, 21...)
-    if ((level - 1) % 10 === 0 && gameState.status !== 'selecting') {
-      setGameState(prev => ({ ...prev, status: 'selecting', level }));
-      return;
-    }
-
     const config = getLevelConfig(level);
     const { grid: newGrid, enemies: newEnemies } = generateMaze(config.size, config.size, config.shards, level);
     
@@ -73,6 +118,19 @@ export default function App() {
     setEnemies(newEnemies);
     setPlayerPos({ x: 0, y: 0 });
     
+    // Spawn Skin Character every 10 levels
+    const skinToSpawn = SKINS.find(s => s.unlockLevel === level);
+    if (skinToSpawn) {
+      setSkinCharacter({
+        type: skinToSpawn.type,
+        x: config.size - 1,
+        y: config.size - 1,
+        isCaught: false
+      });
+    } else {
+      setSkinCharacter(null);
+    }
+
     const initialLives = gameState.activeSkin === 'bunny' ? 5 : 3;
 
     setGameState(prev => ({
@@ -93,7 +151,7 @@ export default function App() {
     timerRef.current = setInterval(() => {
       setTime(t => t + 1);
     }, 1000);
-  }, [gameState.level, gameState.activeSkin, gameState.status]);
+  }, [gameState.level, gameState.activeSkin]);
 
   const handleGameOver = useCallback(() => {
     if (timerRef.current) clearInterval(timerRef.current);
@@ -158,8 +216,24 @@ export default function App() {
         shardsFound++;
       }
 
+      // Skin Character collection
+      if (skinCharacter && !skinCharacter.isCaught && newX === skinCharacter.x && newY === skinCharacter.y) {
+        setSkinCharacter(prev => prev ? { ...prev, isCaught: true } : null);
+        setGameState(s => ({ 
+          ...s, 
+          activeSkin: skinCharacter.type,
+          unlockedSkins: [...s.unlockedSkins, skinCharacter.type]
+        }));
+        confetti({
+          particleCount: 100,
+          spread: 70,
+          origin: { x: 0.5, y: 0.5 },
+          colors: ['#06b6d4', '#d946ef']
+        });
+      }
+
       // Panda Magnet Perk: Collect adjacent shards
-      if (gameState.activeSkin === 'panda') {
+      if (gameState.activeSkin === 'dog') {
         const neighbors = [
           { nx: newX + 1, ny: newY },
           { nx: newX - 1, ny: newY },
@@ -307,18 +381,20 @@ export default function App() {
               Amaze!
             </h1>
             <div className="px-2 py-0.5 bg-slate-900 border border-slate-800 rounded text-[10px] font-bold text-cyan-400">
-              LVL {gameState.level}
+              LEVEL {gameState.level}
             </div>
           </div>
           <div className="flex gap-4 text-[10px] font-mono text-slate-500 uppercase tracking-widest">
             <span className="flex items-center gap-1"><Timer size={10} /> {time}s</span>
             <span className="flex items-center gap-1"><Move size={10} /> {gameState.moves}</span>
-            <span className="flex items-center gap-1 text-red-500"><Heart size={10} fill="currentColor" /> {gameState.lives}</span>
+            {enemies.length > 0 && (
+              <span className="flex items-center gap-1 text-red-500"><Heart size={10} fill="currentColor" /> {gameState.lives}</span>
+            )}
           </div>
         </div>
         
         <div className="flex flex-col items-end gap-1">
-          <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Items</div>
+          <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">LOOT</div>
           <div className="flex gap-1">
             {Array.from({ length: gameState.totalShards }).map((_, i) => (
               <div 
@@ -377,18 +453,20 @@ export default function App() {
                   </motion.div>
                 )}
 
-                {cell.skinShard && (
+                {skinCharacter && !skinCharacter.isCaught && x === skinCharacter.x && y === skinCharacter.y && (
                   <motion.div 
                     animate={{ 
                       y: [0, -4, 0],
-                      scale: [1, 1.1, 1]
+                      scale: [1, 1.1, 1],
+                      filter: ['drop-shadow(0 0 5px rgba(255,255,255,0.5))', 'drop-shadow(0 0 15px rgba(255,255,255,0.8))', 'drop-shadow(0 0 5px rgba(255,255,255,0.5))']
                     }}
                     transition={{ repeat: Infinity, duration: 1.5 }}
-                    className="absolute inset-0 flex items-center justify-center p-1"
+                    className="absolute inset-0 flex items-center justify-center p-1 z-10"
                   >
                     {(() => {
-                      const SkinIcon = SKINS.find(s => s.type === cell.skinShard)?.icon || Circle;
-                      return <SkinIcon size={cellSize * 0.7} className="text-yellow-400 drop-shadow-[0_0_10px_rgba(250,204,21,0.5)]" />;
+                      const SkinIcon = SKINS.find(s => s.type === skinCharacter.type)?.icon || Sparkles;
+                      const skinColor = SKINS.find(s => s.type === skinCharacter.type)?.color || 'text-white';
+                      return <SkinIcon size={cellSize * 0.8} className={`${skinColor} animate-pulse`} />;
                     })()}
                   </motion.div>
                 )}
@@ -463,10 +541,10 @@ export default function App() {
           <Eye size={20} className={isScannerActive ? 'text-white' : 'text-cyan-400'} />
           <div className="text-left">
             <div className={`text-[10px] font-bold uppercase tracking-widest ${isScannerActive ? 'text-white' : 'text-slate-500'}`}>
-              Scanner
+              X-RAY VISION
             </div>
             <div className="text-[8px] text-slate-500 font-mono">
-              {gameState.activeSkin === 'cat' ? 'ENHANCED (5s)' : 'NORMAL (2.5s)'}
+              {gameState.activeSkin === 'cat' ? 'SUPER POWER (5s)' : 'NORMAL (2.5s)'}
             </div>
           </div>
           {isScannerActive && (
@@ -483,16 +561,16 @@ export default function App() {
         <div className="flex items-center gap-8">
           <div className="flex flex-col items-center gap-1">
             <Sparkles size={14} className="text-fuchsia-500 animate-pulse" />
-            <span className="text-[10px] font-bold text-slate-600 uppercase tracking-[0.2em]">Swipe to move</span>
+            <span className="text-[10px] font-bold text-slate-600 uppercase tracking-[0.2em]">WIGGLE TO MOVE</span>
           </div>
         </div>
       </div>
 
       {/* OVERLAYS */}
       <AnimatePresence>
-        {(gameState.status === 'start' || gameState.status === 'selecting') && (
+        {gameState.status === 'start' && (
           <motion.div 
-            key="selection-overlay"
+            key="start-overlay"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -505,45 +583,114 @@ export default function App() {
             >
               <div className="space-y-2">
                 <h1 className="text-6xl font-black tracking-tighter bg-gradient-to-br from-cyan-400 via-fuchsia-500 to-purple-600 bg-clip-text text-transparent">
-                  {gameState.status === 'start' ? 'Amaze!' : 'EVOLVE'}
+                  Amaze!
                 </h1>
                 <p className="text-slate-400 text-sm">
-                  {gameState.status === 'start' 
-                    ? 'Choose your initial avatar and its unique perk.' 
-                    : `Sector ${gameState.level} reached. Select your skin for the next 10 levels.`}
+                  Run through the maze, grab the loot, and unlock cool pets every 10 levels! 🚀
                 </p>
+              </div>
+
+              <div className="bg-slate-900/50 border border-slate-800 p-6 rounded-3xl space-y-4">
+                <div className="flex items-center justify-center gap-4">
+                  <Circle size={48} className="text-slate-400" />
+                  <div className="text-left">
+                    <div className="text-xs font-bold text-slate-500 uppercase tracking-widest">Starting Out</div>
+                    <div className="text-xl font-black text-white">Circle</div>
+                  </div>
+                </div>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  You're just a circle for now. Reach Level 10 to find your first pet! 🐶
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-3">
+                <button 
+                  onClick={() => initGame()}
+                  className="w-full py-5 bg-gradient-to-r from-cyan-500 to-fuchsia-600 text-white rounded-3xl font-black tracking-widest shadow-2xl shadow-cyan-500/20 active:scale-95 transition-transform text-lg"
+                >
+                  LET'S GOOO!
+                </button>
+
+                <button 
+                  onClick={() => setShowLeaderboard(true)}
+                  className="w-full py-4 bg-slate-900/50 border border-slate-800 text-slate-400 rounded-2xl font-bold tracking-widest hover:border-slate-700 transition-all flex items-center justify-center gap-2"
+                >
+                  <Trophy size={18} /> LEGENDS ONLY
+                </button>
+
+                {gameState.unlockedSkins.length > 1 && (
+                  <button 
+                    onClick={() => setShowSkinSelection(true)}
+                    className="w-full py-4 bg-slate-900/50 border border-slate-800 text-slate-400 rounded-2xl font-bold tracking-widest hover:border-slate-700 transition-all flex items-center justify-center gap-2"
+                  >
+                    <User size={18} /> CHANGE SKIN
+                  </button>
+                )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+
+        {showSkinSelection && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[150] bg-slate-950/95 backdrop-blur-xl flex flex-col items-center justify-center p-8"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              className="max-w-md w-full space-y-8 text-center"
+            >
+              <div className="space-y-2">
+                <h2 className="text-4xl font-black tracking-tighter text-white">SELECT SKIN</h2>
+                <p className="text-slate-400 text-sm">Choose from your unlocked evolutions.</p>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 {SKINS.map((skin) => {
+                  const isUnlocked = gameState.unlockedSkins.includes(skin.type);
                   const isActive = gameState.activeSkin === skin.type;
                   const Icon = skin.icon;
                   return (
                     <button
                       key={skin.type}
-                      onClick={() => setGameState(s => ({ ...s, activeSkin: skin.type }))}
+                      disabled={!isUnlocked}
+                      onClick={() => {
+                        setGameState(s => ({ ...s, activeSkin: skin.type }));
+                        setShowSkinSelection(false);
+                      }}
                       className={`relative p-4 rounded-2xl border transition-all flex flex-col items-center gap-2 text-left ${
                         isActive 
                           ? 'bg-slate-900 border-cyan-500 shadow-[0_0_20px_rgba(6,182,212,0.2)]' 
-                          : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                          : isUnlocked ? 'bg-slate-950 border-slate-800 hover:border-slate-700' : 'bg-slate-950 border-slate-900 opacity-20 grayscale'
                       }`}
                     >
+                      {!isUnlocked && <Lock size={14} className="absolute top-2 right-2 text-slate-600" />}
                       <Icon size={32} className={skin.color} />
                       <div className="text-[10px] font-bold uppercase tracking-widest">{skin.name}</div>
-                      <div className="text-[8px] text-slate-500 leading-tight">{skin.perk}</div>
+                      {isUnlocked && <div className="text-[8px] text-slate-500 leading-tight">{skin.perk.split(':')[0]}</div>}
                     </button>
                   );
                 })}
               </div>
 
               <button 
-                onClick={() => initGame()}
-                className="w-full py-5 bg-gradient-to-r from-cyan-500 to-fuchsia-600 text-white rounded-3xl font-black tracking-widest shadow-2xl shadow-cyan-500/20 active:scale-95 transition-transform text-lg"
+                onClick={() => setShowSkinSelection(false)}
+                className="w-full py-4 bg-slate-100 text-slate-950 rounded-2xl font-black tracking-widest active:scale-95 transition-transform"
               >
-                {gameState.status === 'start' ? 'INITIALIZE HACK' : 'CONFIRM EVOLUTION'}
+                BACK
               </button>
             </motion.div>
           </motion.div>
+        )}
+
+        {showLeaderboard && (
+          <Leaderboard 
+            onClose={() => setShowLeaderboard(false)} 
+            entries={leaderboardEntries} 
+          />
         )}
 
         {gameState.status === 'won' && (
@@ -571,18 +718,35 @@ export default function App() {
               </div>
               
               <div className="space-y-2">
-                <h2 className="text-4xl font-black tracking-tighter">SECTOR CLEARED</h2>
-                <p className="text-xs text-slate-500 font-mono uppercase tracking-widest">Level {gameState.level} Complete</p>
+                <h2 className="text-4xl font-black tracking-tighter">BOOM! LEVEL SMASHED!</h2>
+                <p className="text-xs text-slate-500 font-mono uppercase tracking-widest">Level {gameState.level} Done & Dusted</p>
               </div>
 
-              <div className="grid grid-cols-2 gap-4 bg-slate-900/50 p-6 rounded-3xl border border-slate-800">
-                <div className="text-center">
-                  <div className="text-[10px] text-slate-500 uppercase mb-1">Time</div>
-                  <div className="text-2xl font-bold text-cyan-400">{time}s</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-[10px] text-slate-500 uppercase mb-1">Moves</div>
-                  <div className="text-2xl font-bold text-fuchsia-400">{gameState.moves}</div>
+              <div className="space-y-4">
+                <div className="bg-slate-900/50 p-6 rounded-3xl border border-slate-800 space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="text-center">
+                      <div className="text-[10px] text-slate-500 uppercase mb-1">Clock</div>
+                      <div className="text-2xl font-bold text-cyan-400">{time}s</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-[10px] text-slate-500 uppercase mb-1">Steps</div>
+                      <div className="text-2xl font-bold text-fuchsia-400">{gameState.moves}</div>
+                    </div>
+                  </div>
+                  
+                  {!localStorage.getItem('maze_player_name') && (
+                    <div className="pt-4 border-t border-slate-800">
+                      <input 
+                        type="text" 
+                        placeholder="WHAT'S YOUR COOL NAME?"
+                        value={playerName}
+                        onChange={(e) => setPlayerName(e.target.value.toUpperCase())}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-center text-sm font-bold tracking-widest text-white focus:border-cyan-500 outline-none transition-all"
+                        maxLength={12}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -591,15 +755,23 @@ export default function App() {
                   onClick={() => initGame()}
                   className="flex-1 py-4 bg-slate-900 text-white rounded-2xl font-bold hover:bg-slate-800 transition-colors"
                 >
-                  REPLAY
+                  AGAIN!
                 </button>
                 <button 
-                  onClick={() => initGame(gameState.level + 1)}
-                  className="flex-[2] py-4 bg-white text-slate-950 rounded-2xl font-black tracking-widest hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-2"
+                  onClick={submitScore}
+                  disabled={!playerName.trim() || isSubmitting}
+                  className="flex-[2] py-4 bg-white text-slate-950 rounded-2xl font-black tracking-widest hover:scale-105 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:scale-100"
                 >
-                  NEXT SECTOR <ChevronRight size={20} />
+                  {isSubmitting ? 'SAVING...' : 'NEXT LEVEL'} <ChevronRight size={20} />
                 </button>
               </div>
+
+              <button 
+                onClick={() => setShowLeaderboard(true)}
+                className="w-full py-3 bg-slate-900/50 border border-slate-800 text-slate-500 rounded-xl font-bold tracking-widest hover:border-slate-700 transition-all flex items-center justify-center gap-2"
+              >
+                <Trophy size={16} /> WHO'S THE BEST?
+              </button>
             </motion.div>
           </motion.div>
         )}
@@ -621,16 +793,25 @@ export default function App() {
               </div>
               
               <div className="space-y-2">
-                <h2 className="text-4xl font-black tracking-tighter text-red-500">SYSTEM FAILURE</h2>
-                <p className="text-xs text-slate-500 font-mono uppercase tracking-widest">Sector {gameState.level} Compromised</p>
+                <h2 className="text-4xl font-black tracking-tighter text-red-500">OUCH! TRY AGAIN!</h2>
+                <p className="text-xs text-slate-500 font-mono uppercase tracking-widest">Level {gameState.level} was too tough!</p>
               </div>
 
-              <button 
-                onClick={() => initGame()}
-                className="w-full py-5 bg-red-600 text-white rounded-3xl font-black tracking-widest shadow-2xl shadow-red-500/20 active:scale-95 transition-transform text-lg"
-              >
-                RETRY SECTOR
-              </button>
+              <div className="flex flex-col gap-3">
+                <button 
+                  onClick={() => initGame()}
+                  className="w-full py-5 bg-red-600 text-white rounded-3xl font-black tracking-widest shadow-2xl shadow-red-500/20 active:scale-95 transition-transform text-lg"
+                >
+                  GIVE IT ANOTHER GO!
+                </button>
+
+                <button 
+                  onClick={() => setShowLeaderboard(true)}
+                  className="w-full py-4 bg-slate-900/50 border border-slate-800 text-slate-500 rounded-2xl font-bold tracking-widest hover:border-slate-700 transition-all flex items-center justify-center gap-2"
+                >
+                  <Trophy size={18} /> LEADERBOARD
+                </button>
+              </div>
             </motion.div>
           </motion.div>
         )}

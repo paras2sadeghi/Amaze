@@ -1,0 +1,47 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: leaderboard
+    // Document ID: auto-generated
+    // Fields:
+    //   - name: string (required, 1-12 chars) - Player's alias
+    //   - level: number (required, positive) - Level reached
+    //   - time: number (required, positive) - Time in seconds
+    //   - moves: number (required, positive) - Number of moves
+    //   - skin: string (required, 1-20 chars) - Skin type
+    //   - createdAt: timestamp (required) - Creation time
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isValidLeaderboardEntry(data) {
+      return data.keys().hasAll(['name', 'level', 'time', 'moves', 'skin', 'createdAt']) &&
+             data.keys().hasOnly(['name', 'level', 'time', 'moves', 'skin', 'createdAt']) &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 12 &&
+             data.level is number && data.level > 0 &&
+             data.time is number && data.time > 0 &&
+             data.moves is number && data.moves > 0 &&
+             data.skin is string && data.skin.size() >= 1 && data.skin.size() <= 20 &&
+             data.createdAt is timestamp;
+    }
+
+    match /leaderboard/{entryId} {
+      // Publicly readable for the leaderboard UI
+      allow read: if true;
+      
+      // Anyone can submit a score, but it must be valid
+      allow create: if isValidLeaderboardEntry(request.resource.data) &&
+                      request.resource.data.createdAt == request.time;
+      
+      // No updates or deletes allowed for leaderboard entries to prevent tampering
+      allow update, delete: if false;
+    }
+  }
+}
